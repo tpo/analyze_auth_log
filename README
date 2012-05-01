@@ -1,0 +1,4 @@
+a script to analyze and summarize /var/log/auth.log*
+
+Tomas Pospisek : tpo_deb @ sourcepole.ch
+License: GPLv2

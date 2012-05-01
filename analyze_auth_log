@@ -1,0 +1,173 @@
+#!/bin/bash
+#
+# analyze and summarize auth.logs
+#
+# Tomas Pospisek <tpo_deb@sourcepole.ch>
+#
+# license: GPLv2
+
+tmpfile=`mktemp`
+
+(
+  ############################################################
+  #
+  # first concat all auth logs
+  #
+  ############################################################
+
+  cat /var/log/auth.log /var/log/auth.log.1
+  zcat /var/log/auth.log*.gz
+) \
+| \
+(
+  ############################################################
+  #
+  # then drop everything we're not interested in
+  #
+  ############################################################
+
+  # drop:
+  #
+  # Apr 15 18:49:39 myserver sshd[3363]: Address 74.3.165.7 maps to annoyed.marketwisedeals.com, but this does not map back to the address - POSSIBLE BREAK-IN ATTEMPT!
+
+  grep -v "but this does not map back to the address"
+) \
+| \
+(
+
+  # drop:
+  #
+  # Apr 29 06:47:01 myserver CRON[12381]: pam_unix(cron:session): session opened for user root by (uid=0)
+  # Apr 29 06:47:01 myserver CRON[12381]: pam_unix(cron:session): session closed for user root
+
+  grep -v "cron:session"
+) \
+| \
+(
+
+  # only take last line:
+  #
+  # Apr 29 06:25:03 myserver sshd[11547]: Invalid user aida from 174.143.253.29
+  # Apr 29 06:25:03 myserver sshd[11547]: pam_unix(sshd:auth): check pass; user unknown
+  # Apr 29 06:25:03 myserver sshd[11547]: pam_unix(sshd:auth): authentication failure; logname= uid=0 euid=0 tty=ssh ruser= rhost=174-143-253-29.static.cloud-ips.com 
+  # Apr 29 06:25:05 myserver sshd[11547]: Failed password for invalid user aida from 174.143.253.29 port 43198 ssh2
+
+    grep -v ": Invalid user " \
+  | grep -v ": pam_unix(sshd:auth): check pass; user unknown" \
+  | grep -v ": pam_unix(sshd:auth): authentication failure; "
+) \
+| \
+(
+
+  # only take first line:
+  #
+  # Apr 29 15:11:53 myserver sshd[16456]: Accepted publickey for root from 87.245.118.254 port 65331 ssh2
+  # Apr 29 15:11:53 myserver sshd[16456]: pam_unix(sshd:session): session opened for user root by (uid=0)
+  # Apr 29 15:12:01 myserver sshd[16456]: Received disconnect from 87.245.118.254: 11: disconnected by user
+  # Apr 29 15:12:01 myserver sshd[16456]: pam_unix(sshd:session): session closed for user root
+
+    grep -v ": pam_unix(sshd:session): session opened for user " \
+  | grep -v ": Received disconnect from " \
+  | grep -v ": pam_unix(sshd:session): session closed for user "
+) \
+| \
+(
+
+  # drop:
+  #
+  # Apr 24 08:38:29 myserver sshd[6303]: reverse mapping checking getaddrinfo for 11.242.127.124.broad.bj.bj.static.163data.com.cn [124.127.242.11] failed - POSSIBLE BREAK-IN ATTEMPT!
+
+  grep -v ": reverse mapping checking getaddrinfo for "
+) \
+| \
+(
+
+  # drop:
+  #
+  # Apr 16 13:15:21 myserver sshd[1059]: Did not receive identification string from 103.29.185.170
+
+  grep -v ": Did not receive identification string from "
+) \
+| \
+(
+  # drop sftp line:
+  #
+  # Apr 26 12:47:39 myserver sshd[7648]: Accepted publickey for root from 147.232.75.1 port 49989 ssh2
+  # Apr 26 12:47:39 myserver sshd[7648]: pam_unix(sshd:session): session opened for user root by (uid=0)
+  # Apr 26 12:47:39 myserver sshd[7648]: subsystem request for sftp
+  # Apr 26 12:47:39 myserver sshd[7648]: Received disconnect from 147.232.75.1: 11: disconnected by user
+  # Apr 26 12:47:39 myserver sshd[7648]: pam_unix(sshd:session): session closed for user root
+
+  grep -v "subsystem request for sftp"
+) \
+| \
+(
+  # drop:
+  #
+  # Apr 15 21:51:22 myserver sshd[6619]: PAM 1 more authentication failure; logname= uid=0 euid=0 tty=ssh ruser= rhost=voip4.connectel.fr  user=root
+
+  grep -v " more authentication failure; "
+) \
+| \
+(
+  # drop:
+  #
+  # Apr 16 07:43:22 myserver sshd[1559]: Received signal 15; terminating.
+  # Apr 16 12:10:40 myserver sshd[1021]: Server listening on 0.0.0.0 port 22.
+  # Apr 16 12:10:40 myserver sshd[1021]: Server listening on :: port 22.
+  #
+  # Apr 19 14:05:50 myserver sshd[5781]: Exiting on signal 15
+
+    grep -v ": Received signal 15; terminating." \
+  | grep -v ": Server listening on " \
+  | grep -v ": Exiting on signal 15"
+) \
+| \
+(
+  # drop second line:
+  #
+  # Apr 16 07:43:16 myserver login[1579]: pam_unix(login:auth): authentication failure; logname=LOGIN uid=0 euid=0 tty=/dev/tty1 ruser= rhost=  user=root
+  # Apr 16 07:43:18 myserver login[1579]: FAILED LOGIN (1) on '/dev/tty1' FOR 'root', Authentication failure
+
+  grep -v ": FAILED LOGIN .*tty"
+) > $tmpfile
+
+############################################################
+#
+# then summarise everything we *are* interested in
+#
+############################################################
+
+# output failed:
+#
+# Apr 29 06:25:05 myserver sshd[11547]: Failed password for invalid user aida from 174.143.253.1 port 43198 ssh2
+
+all_ips=`mktemp`
+uniq_ips=`mktemp`
+
+cat $tmpfile | grep ": Failed .* from " | sed 's/.*: Failed .* from //' | sed 's/ port .*//' | sort > $all_ips
+cat $all_ips | sort -u > $uniq_ips
+
+for i in `cat $uniq_ips`; do
+  echo -n "Failed attempts from $i: "
+  cat $all_ips | grep $i | wc -l
+done
+
+# echo $all_ips
+# echo $uniq_ips
+# exit
+
+rm $all_ips
+rm $uniq_ips
+
+# output rest:
+
+cat $tmpfile | grep -v ": Failed .* from "
+
+############################################################
+#
+# clean up
+#
+############################################################
+
+rm $tmpfile
